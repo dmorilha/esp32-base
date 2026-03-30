@@ -4,10 +4,12 @@
  * This simple logger class is designed to accumulate messages into
  * a 10k buffer and persist them into a SD card every 5 minutes.
  *
- * It is supposed to have just one thread producing messages,
- * with another thread persisting them.
+ * It allows multiple tasks to produce messages, with a separate
+ * task persisting them.
  */
 #pragma once
+
+#include <atomic>
 
 struct Logger;
 
@@ -24,8 +26,8 @@ private:
 
   char * buffer_;
   char * head_ = nullptr;
-  char * tail_ = nullptr;
+  std::atomic<char *> tail_ = nullptr;
 
   static size_t SIZE;
-  static Logger * instance_;
+  static std::atomic<Logger *> instance_;
 };

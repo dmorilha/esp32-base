@@ -14,14 +14,23 @@ Logger::Logger() : buffer_(new char[SIZE]),
   tail_(buffer_) { }
 
 void Logger::log(char * message) {
-  char * tail = tail_;
-  while ('\0' != *message) {
-    *tail++ = *message++;
-    if (SIZE == tail - buffer_) {
-      tail = buffer_;
+  const size_t message_length = strlen(message);
+  char * local_tail = tail_;
+  char * new_tail;
+
+  do {
+    new_tail = local_tail + message_length;
+    if (buffer_ + SIZE <= new_tail) {
+      new_tail = buffer_ + (new_tail - (buffer_ + SIZE));
+    }
+  } while( ! std::atomic_compare_exchange_strong(&tail_, &local_tail, new_tail));
+
+  for (size_t i = 0; message_length > i; ++i) {
+    *local_tail++ = message[i];
+    if (SIZE == local_tail - buffer_) {
+      local_tail = buffer_;
     }
   }
-  tail_ = tail;
 }
 
 void Logger::log_with_time(char * in) {
@@ -29,31 +38,30 @@ void Logger::log_with_time(char * in) {
   struct tm t;
   t.tm_year = 0;
   if (getLocalTime(&t, 100)) {
-    snprintf(message, 256, "%03d-%02d-%02d-%02d: %s",
+    snprintf(message, 256, "%03d-%02d:%02d:%02d: %s",
         t.tm_yday, t.tm_hour, t.tm_min, t.tm_sec, in);
   } else {
     snprintf(message, 256, "(no time): %s", in);
   }
   log(message);
-  Serial.printf(message);
 }
 
 bool Logger::persist() {
   bool result = false;
   if (SD_MMC.begin("/sdcard", true)) {
-    File file = SD_MMC.open("/esp32.log", FILE_APPEND);
+    File file = SD_MMC.open("/log.txt", FILE_APPEND);
     if ( ! file) {
       Serial.println("Failed to open file for appending");
       return false;
     }
-    char * const tail = tail_;
-    if (head_ < tail) {
-      result = file.write(reinterpret_cast<uint8_t*>(head_), tail - head_);
-      head_ = tail;
-    } else if (head_ > tail) {
+    char * const local_tail = tail_;
+    if (head_ < local_tail) {
+      result = file.write(reinterpret_cast<uint8_t*>(head_), local_tail - head_);
+      head_ = local_tail;
+    } else if (head_ > local_tail) {
       result = file.write(reinterpret_cast<uint8_t*>(head_), buffer_ + SIZE - head_);
-      result &= file.write(reinterpret_cast<uint8_t*>(buffer_), tail - buffer_);
-      head_ = tail;
+      result &= file.write(reinterpret_cast<uint8_t*>(buffer_), local_tail - buffer_);
+      head_ = local_tail;
     }
     file.close();
   }
@@ -62,12 +70,14 @@ bool Logger::persist() {
 
 Logger * Logger::get_instance() {
   if (nullptr == instance_) {
-    instance_ = new Logger();
-    instance_->log_with_time("Logger instantiated\n");
+    Logger * expected = nullptr;
+    if (std::atomic_compare_exchange_strong(&instance_, &expected, new Logger())) {
+      instance_.load()->log_with_time("Logger instantiated.\n");
+    }
   }
   return instance_;
 }
 
 /* static initialization */
 size_t Logger::SIZE = 10240;
-Logger * Logger::instance_ = nullptr;
+std::atomic<Logger *> Logger::instance_ = nullptr;

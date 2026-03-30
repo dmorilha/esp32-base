@@ -32,14 +32,12 @@
 void yieldIfNecessary(void) {
   static uint64_t lastYield = 0;
   uint64_t now = millis();
-  if ((now - lastYield) > 2000) {
+  if ((now - lastYield) > 2'000) {
     lastYield = now;
     vTaskDelay(5);  //delay 1 RTOS tick
   }
 }
 #endif
-
-bool loopTaskWDTEnabled;
 
 __attribute__((weak)) size_t getArduinoLoopTaskStackSize(void) {
   return ARDUINO_LOOP_STACK_SIZE;
@@ -56,30 +54,34 @@ __attribute__((weak)) uint64_t getArduinoSetupWaitTime_ms(void) {
 
 TaskHandle_t logger_task_handle = nullptr;
 void logger_task(void *) {
-  Logger * logger = Logger::get_instance();
+  Logger * const logger = Logger::get_instance();
   while (true) {
+    delay(5 * 60 * 1'000 /* milliseconds */); /* 5 minutes delay */
     const bool result = logger->persist();
     struct tm t;
     t.tm_year = 0;
     if (getLocalTime(&t, 1'000)) {
-      Serial.printf("%d-%02d-%02d %02d:%02d:%02d: logger::persist %s.\n",
+      Serial.printf("%d-%02d-%02d %02d:%02d:%02d: Logger::persist %s.\n",
           t.tm_year + 1'900, t.tm_mon + 1, t.tm_mday,
           t.tm_hour, t.tm_min, t.tm_sec,
           (result ? "worked" : "failed"));
+    } else {
+      Serial.printf("(no time): Logger::persist %s.\n",
+          (result ? "worked" : "failed"));
     }
-    delay(5 * 60 * 1'000 /* milliseconds */); /* 5 minutes delay */
   }
 }
 
 TaskHandle_t ntp_task_handle = nullptr;
 void ntp_task(void *) {
+  Logger * const logger = Logger::get_instance();
   size_t synchronized_counter = 0;
   while (true) {
     bool synchronize = 0 == synchronized_counter;
 
     struct tm t;
     t.tm_year = 0;
-    if (getLocalTime(&t, 1'000)) {
+    if (getLocalTime(&t, 100)) {
       Serial.printf("Now is %d-%02d-%02d %02d:%02d:%02d\n",
           t.tm_year + 1'900, t.tm_mon + 1, t.tm_mday,
           t.tm_hour, t.tm_min, t.tm_sec);
@@ -88,27 +90,28 @@ void ntp_task(void *) {
     }
 
     if (synchronize) {
-      /* hide your WIFI_SSD, WIFI_PASSPHRASE as define macros in a separate header */
+      /*
+       * Hide your WIFI_SSD and WIFI_PASSPHRASE as define
+       * macros in a separate header file
+       **/
       WiFi.begin(WIFI_SSD, WIFI_PASSPHRASE);
-      for (size_t counter = 20; 0 < counter; counter -= 1) {
+      size_t counter;
+      for (counter = 20; 0 < counter; --counter) {
         if (WiFi.status() != WL_CONNECTED) {
           delay(500 /* milliseconds */);
           continue;
         }
-
-        Serial.println("Connected to " WIFI_SSD);
-        configTime(3'600, 3'600, "pool.ntp.org", "time.nist.gov", nullptr);
-        delay(2'000 /* milliseconds */);
-
-        {
-          if (getLocalTime(&t, 5'000)) {
-            synchronized_counter = 12;
-            Serial.printf("Now is %d-%02d-%02d %02d:%02d:%02d\n",
-                t.tm_year + 1'900, t.tm_mon + 1, t.tm_mday,
-                t.tm_hour, t.tm_min, t.tm_sec);
-          }
+        logger->log_with_time("Connected to " WIFI_SSD ".\n");
+        configTzTime("BRT+3", "pool.ntp.org", "time.nist.gov", nullptr);
+        if (getLocalTime(&t, 3'000)) {
+          synchronized_counter = 12;
+          logger->log_with_time("Time updated.\n");
         }
         WiFi.disconnectAsync();
+        break;
+      }
+      if (0 == counter) {
+        logger->log_with_time("Time update failed.\n");
       }
     }
 
@@ -120,35 +123,22 @@ void ntp_task(void *) {
 
 TaskHandle_t main_task_handle = nullptr;
 void main_task(void *) {
-  delay(getArduinoSetupWaitTime_ms());
-#if ARDUHAL_LOG_LEVEL >= ARDUHAL_LOG_LEVEL_DEBUG
-  printBeforeSetupInfo();
-#else
-  if (shouldPrintChipDebugReport()) {
-    printBeforeSetupInfo();
-  }
-#endif
-#if !defined(NO_GLOBAL_INSTANCES) && !defined(NO_GLOBAL_SERIAL)
-  // sets UART0 (default console) RX/TX pins as already configured in boot or as defined in variants/pins_arduino.h
-  Serial0.setPins(gpioNumberToDigitalPin(SOC_RX0), gpioNumberToDigitalPin(SOC_TX0));
-  // time in ms that the sketch may wait before starting its execution - default is zero
-  // usually done for opening the Serial Monitor and seeing all debug messages
-#endif
-  setup();
-#if ARDUHAL_LOG_LEVEL >= ARDUHAL_LOG_LEVEL_DEBUG
-  printAfterSetupInfo();
-#else
-  if (shouldPrintChipDebugReport()) {
-    printAfterSetupInfo();
-  }
-#endif
+  Logger * const logger = Logger::get_instance();
 
-  /* the real application loop comes here */
+  while (true) {
+    /* the real application loop comes here */
 
-  /*
-   * You can log messages calling
-   * `Logger::get_instance()->log_with_time("my message\n");`
-   **/
+    delay(5 * 60 * 1'000 /* milliseconds */);
+
+    /*
+     * You can log messages calling
+     * `logger->log_with_time("my message\n");`
+     **/
+
+    if (serialEventRun) {
+      serialEventRun();
+    }
+  }
 }
 
 extern "C" void app_main() {
@@ -168,23 +158,38 @@ extern "C" void app_main() {
 #if ARDUINO_USB_ON_BOOT && !ARDUINO_USB_MODE
   USB.begin();
 #endif
-  loopTaskWDTEnabled = false;
 
   initArduino();
+
+  if (shouldPrintChipDebugReport()) {
+    printBeforeSetupInfo();
+  }
+
+#if !defined(NO_GLOBAL_INSTANCES) && !defined(NO_GLOBAL_SERIAL)
+  // sets UART0 (default console) RX/TX pins as already configured in boot or as defined in variants/pins_arduino.h
+  Serial0.setPins(gpioNumberToDigitalPin(SOC_RX0), gpioNumberToDigitalPin(SOC_TX0));
+  // time in ms that the sketch may wait before starting its execution - default is zero
+  // usually done for opening the Serial Monitor and seeing all debug messages
+#endif
+  setup();
+
+  if (shouldPrintChipDebugReport()) {
+    printAfterSetupInfo();
+  }
+
+  /* instantiates logger */
+  Logger::get_instance();
 
   /* ntp */ 
   xTaskCreateUniversal(ntp_task, "ntp_task", getArduinoLoopTaskStackSize(),
       nullptr, 1, &ntp_task_handle, ARDUINO_RUNNING_CORE);
 
-  /* wait a seconds here to give it a chance for the ntp to kick in */
-  delay(1'000 /* milliseconds */);
+  /* wait three seconds here to give it a chance for the ntp to kick in */
+  delay(3'000 /* milliseconds */);
 
   /* logger */
   xTaskCreateUniversal(logger_task, "logger_task", getArduinoLoopTaskStackSize(),
       nullptr, 1, &logger_task_handle, ARDUINO_RUNNING_CORE);
-
-  /* wait a seconds here to give it a chance for the logger to kick in */
-  delay(1'000 /* milliseconds */);
 
   /* application */
 #if 1
