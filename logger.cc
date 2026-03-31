@@ -49,21 +49,27 @@ void Logger::log_with_time(char * in) {
 bool Logger::persist() {
   bool result = false;
   if (SD_MMC.begin("/sdcard", true)) {
-    File file = SD_MMC.open("/log.txt", FILE_APPEND);
-    if ( ! file) {
-      Serial.println("Failed to open file for appending");
-      return false;
+    for (size_t i = 0; 3 > i; ++i) {
+      File file = SD_MMC.open("/log.txt", FILE_APPEND);
+      if ( ! file) {
+        Serial.println("Failed to open file for appending");
+        delay(10 /* milliseconds */);
+        continue;
+      }
+      char * const local_tail = tail_;
+      if (head_ < local_tail) {
+        result = file.write(reinterpret_cast<uint8_t*>(head_), local_tail - head_);
+        head_ = local_tail;
+      } else if (head_ > local_tail) {
+        result = file.write(reinterpret_cast<uint8_t*>(head_), buffer_ + SIZE - head_);
+        if (buffer_ < local_tail) {
+          result &= file.write(reinterpret_cast<uint8_t*>(buffer_), local_tail - buffer_);
+        }
+        head_ = local_tail;
+      }
+      file.close();
+      break;
     }
-    char * const local_tail = tail_;
-    if (head_ < local_tail) {
-      result = file.write(reinterpret_cast<uint8_t*>(head_), local_tail - head_);
-      head_ = local_tail;
-    } else if (head_ > local_tail) {
-      result = file.write(reinterpret_cast<uint8_t*>(head_), buffer_ + SIZE - head_);
-      result &= file.write(reinterpret_cast<uint8_t*>(buffer_), local_tail - buffer_);
-      head_ = local_tail;
-    }
-    file.close();
   }
   return result;
 }
