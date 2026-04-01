@@ -52,21 +52,27 @@ void Logger::log_with_time(char * in) {
 
 bool Logger::persist() {
   bool result = false;
-  if (open_log_file()) {
-    char * const local_tail = tail_;
-    if (head_ < local_tail) {
-      result = log_file_.write(reinterpret_cast<uint8_t*>(head_), local_tail - head_);
-      head_ = local_tail;
-    } else if (head_ > local_tail) {
-      result = log_file_.write(reinterpret_cast<uint8_t*>(head_), buffer_ + SIZE - head_);
-      if (buffer_ < local_tail) {
-        result &= log_file_.write(reinterpret_cast<uint8_t*>(buffer_), local_tail - buffer_);
+  for (size_t i = 0; 3 > i; ++i) {
+    if (open_log_file()) {
+      char * const local_tail = tail_;
+      if (head_ < local_tail) {
+        result = log_file_.write(reinterpret_cast<uint8_t*>(head_), local_tail - head_);
+        head_ = local_tail;
+      } else if (head_ > local_tail) {
+        result = log_file_.write(reinterpret_cast<uint8_t*>(head_), buffer_ + SIZE - head_);
+        if (buffer_ < local_tail) {
+          result &= log_file_.write(reinterpret_cast<uint8_t*>(buffer_), local_tail - buffer_);
+        }
+        head_ = local_tail;
       }
-      head_ = local_tail;
+      if (result) {
+        log_file_.flush();
+        break;
+      } else {
+        log_file_.close();
+      }
     }
-    if ( ! result) {
-      log_file_.close();
-    }
+    delay(100);
   }
   return result;
 }
