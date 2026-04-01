@@ -11,11 +11,15 @@
 
 #include <atomic>
 
+#include <FS.h>
+
 struct Logger;
 
 struct Logger {
   ~Logger();
-  bool persist(void);
+
+  bool open_log_file();
+  bool persist();
   void log(char *);
   void log_with_time(char *);
 
@@ -27,6 +31,7 @@ private:
   char * buffer_;
   char * head_ = nullptr;
   std::atomic<char *> tail_ = nullptr;
+  File log_file_;;
 
   static size_t SIZE;
   static std::atomic<Logger *> instance_;

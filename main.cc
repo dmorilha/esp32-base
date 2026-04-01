@@ -52,28 +52,9 @@ __attribute__((weak)) uint64_t getArduinoSetupWaitTime_ms(void) {
   return 0;
 }
 
-TaskHandle_t logger_task_handle = nullptr;
-void logger_task(void *) {
-  Logger * const logger = Logger::get_instance();
-  while (true) {
-    delay(5 * 60 * 1'000 /* milliseconds */); /* 5 minutes delay */
-    const bool result = logger->persist();
-    struct tm t;
-    t.tm_year = 0;
-    if (getLocalTime(&t, 1'000)) {
-      Serial.printf("%d-%02d-%02d %02d:%02d:%02d: Logger::persist %s.\n",
-          t.tm_year + 1'900, t.tm_mon + 1, t.tm_mday,
-          t.tm_hour, t.tm_min, t.tm_sec,
-          (result ? "worked" : "failed"));
-    } else {
-      Serial.printf("(no time): Logger::persist %s.\n",
-          (result ? "worked" : "failed"));
-    }
-  }
-}
-
 TaskHandle_t ntp_task_handle = nullptr;
 void ntp_task(void *) {
+  Serial.println("NTP task created.");
   Logger * const logger = Logger::get_instance();
   size_t synchronized_counter = 0;
   while (true) {
@@ -103,14 +84,18 @@ void ntp_task(void *) {
         }
         logger->log_with_time("Connected to " WIFI_SSD ".\n");
         configTzTime("BRT+3", "pool.ntp.org", "time.nist.gov", nullptr);
-        if (getLocalTime(&t, 3'000)) {
+        if (getLocalTime(&t, 5'000)) {
           synchronized_counter = 12;
           logger->log_with_time("Time updated.\n");
+          WiFi.disconnectAsync();
+          Serial.printf("Now is %d-%02d-%02d %02d:%02d:%02d\n",
+              t.tm_year + 1'900, t.tm_mon + 1, t.tm_mday,
+              t.tm_hour, t.tm_min, t.tm_sec);
+          break;
         }
-        WiFi.disconnectAsync();
-        break;
       }
       if (0 == counter) {
+        WiFi.disconnectAsync();
         logger->log_with_time("Time update failed.\n");
       }
     }
@@ -118,6 +103,27 @@ void ntp_task(void *) {
     /* 5 minutes delay */
     delay(5 * 60 * 1'000 /* milliseconds */);
     synchronized_counter -= 0 < synchronized_counter ? 1 : 0;
+  }
+}
+
+TaskHandle_t logger_task_handle = nullptr;
+void logger_task(void *) {
+  Serial.println("Logger task created.");
+  Logger * const logger = Logger::get_instance();
+  while (true) {
+    delay(5 * 60 * 1'000 /* milliseconds */); /* 5 minutes delay */
+    const bool result = logger->persist();
+    struct tm t;
+    t.tm_year = 0;
+    if (getLocalTime(&t, 1'000)) {
+      Serial.printf("%d-%02d-%02d %02d:%02d:%02d: Logger::persist %s.\n",
+          t.tm_year + 1'900, t.tm_mon + 1, t.tm_mday,
+          t.tm_hour, t.tm_min, t.tm_sec,
+          (result ? "worked" : "failed"));
+    } else {
+      Serial.printf("(no time): Logger::persist %s.\n",
+          (result ? "worked" : "failed"));
+    }
   }
 }
 
@@ -184,8 +190,8 @@ extern "C" void app_main() {
   xTaskCreateUniversal(ntp_task, "ntp_task", getArduinoLoopTaskStackSize(),
       nullptr, 1, &ntp_task_handle, ARDUINO_RUNNING_CORE);
 
-  /* wait three seconds here to give it a chance for the ntp to kick in */
-  delay(3'000 /* milliseconds */);
+  /* wait five seconds here to give it a chance for the NTP to kick in */
+  delay(5'000 /* milliseconds */);
 
   /* logger */
   xTaskCreateUniversal(logger_task, "logger_task", getArduinoLoopTaskStackSize(),
